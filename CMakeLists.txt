@@ -205,15 +205,14 @@ endif()
 add_subdirectory(FileCheck)
 
 # ---------------------------------------------------------------------------
-# Generate sit.cfg.py into the build directory.
+# Generate sit.cfg.json into the build directory.
 # FileCheck executable is in the build tree after add_subdirectory(FileCheck).
 # ---------------------------------------------------------------------------
 set(FILECHECK_EXE "${CMAKE_BINARY_DIR}/FileCheck/FileCheck")
-
 # Two steps: configure_file handles @VAR@ substitutions at configure time,
 # file(GENERATE) resolves $<TARGET_FILE:...> expressions at build time.
-configure_file(sit.cfg.py.in sit.cfg.py.intermediate @ONLY)
+configure_file(sit.cfg.json.in sit.cfg.json.intermediate @ONLY)
 file(GENERATE
-    OUTPUT "${CMAKE_BINARY_DIR}/sit.cfg.py"
-    INPUT  "${CMAKE_BINARY_DIR}/sit.cfg.py.intermediate"
+    OUTPUT "${CMAKE_BINARY_DIR}/sit.cfg.json"
+    INPUT  "${CMAKE_BINARY_DIR}/sit.cfg.json.intermediate"
 )

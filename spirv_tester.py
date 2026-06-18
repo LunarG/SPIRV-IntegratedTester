@@ -6,13 +6,13 @@ A simple test harness for NonSemantic.ShaderDebugInfo regression testing.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
-import types
 from pathlib import Path
 
 
@@ -20,47 +20,56 @@ from pathlib import Path
 # Config
 # ---------------------------------------------------------------------------
 
-# Extensions the harness will treat as test files if config.suffixes is unset.
+# Extensions the harness will treat as test files if not specified in config.
 DEFAULT_SUFFIXES = [".glsl", ".hlsl", ".slang", ".spvasm"]
 
 # Substitutions the harness requires to be defined in the config.
 REQUIRED_SUBSTITUTIONS = ["%spirv_dis", "%check"]
 
+# Default config file name to search for.
+DEFAULT_CONFIG_NAME = "sit.cfg.json"
+
 
 class Config:
-    """
-    Object injected into the cfg file as `config`.
-    The cfg file populates its attributes; the harness reads them back.
-    """
-
-    def __init__(self, cfg_path: Path):
-        self.name: str = ""
-        self.test_dir: str = str(cfg_path.parent)  # default: same dir as cfg
+    def __init__(self):
+        self.test_dir: str = ""
         self.suffixes: list[str] = list(DEFAULT_SUFFIXES)
-        # List of (pattern, replacement) tuples, e.g. ("%glslang", "/usr/bin/glslang").
+        # List of (pattern, replacement) tuples, e.g. ("%slangc", "/usr/bin/slangc").
         self.substitutions: list[tuple[str, str]] = []
-        # Optional: tmp dir for .spv / .spvasm intermediates.
-        # Defaults to a system temp dir created at runtime.
-        self.tmp_dir: str = ""
+
+
+def find_default_config() -> Path | None:
+    """Search for sit.cfg.json in the current directory then build/."""
+    for candidate in [
+        Path.cwd() / DEFAULT_CONFIG_NAME,
+        Path.cwd() / "build" / DEFAULT_CONFIG_NAME,
+    ]:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_config(cfg_path: Path) -> Config:
-    """
-    exec() the Python cfg file and return the populated Config object.
-    Raises SystemExit with a clear message on any error.
-    """
-    config = Config(cfg_path)
-    global_ns = {"config": config, "os": os, "sys": sys}
-
+    """Load and validate a sit.cfg.json file."""
     try:
-        source = cfg_path.read_text(encoding="utf-8")
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
     except OSError as e:
         _die(f"Cannot read config file: {e}")
+    except json.JSONDecodeError as e:
+        _die(f"Invalid JSON in config file {cfg_path}:\n  {e}")
 
-    try:
-        exec(compile(source, str(cfg_path), "exec"), global_ns)  # noqa: S102
-    except Exception as e:
-        _die(f"Error in config file {cfg_path}:\n  {type(e).__name__}: {e}")
+    config = Config()
+
+    config.test_dir = raw.get("test_dir", str(cfg_path.parent))
+    config.suffixes = raw.get("suffixes", DEFAULT_SUFFIXES)
+
+    # Build substitutions list, skipping empty values (optional tools not found).
+    subs = raw.get("substitutions", {})
+    config.substitutions = [
+        (pattern, replacement)
+        for pattern, replacement in subs.items()
+        if replacement
+    ]
 
     _validate_config(config, cfg_path)
     return config
@@ -146,10 +155,10 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     spvasm_out = tmp_dir / f"{stem}.spvasm"
 
     extra_subs = {
-        "%s": str(test_file),           # the test file itself (matches lit convention)
-        "%spv": str(spv_out),           # compiled SPIR-V binary
-        "%spvasm": str(spvasm_out),     # disassembled SPIR-V text
-        "%t": str(tmp_dir / stem),      # generic temp file prefix
+        "%s":      str(test_file),       # the test file itself
+        "%spv":    str(spv_out),         # compiled SPIR-V binary
+        "%spvasm": str(spvasm_out),      # disassembled SPIR-V text
+        "%t":      str(tmp_dir / stem),  # generic temp file prefix
     }
 
     for run_line in run_lines:
@@ -205,22 +214,21 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             Examples:
-              %(prog)s lit.cfg.py
-              %(prog)s lit.cfg.py tests/glsl/basic_debug.glsl
-              %(prog)s lit.cfg.py --test-dir tests/glsl
+              %(prog)s
+              %(prog)s tests/slang/basic_debug.slang
+              %(prog)s --config build/sit.cfg.json
         """),
     )
-    parser.add_argument("config", metavar="CFG", help="Path to the lit.cfg.py file")
+    parser.add_argument(
+        "--config",
+        metavar="CFG",
+        help=f"Path to sit.cfg.json (default: searches ./ then ./build/).",
+    )
     parser.add_argument(
         "tests",
         metavar="TEST",
         nargs="*",
         help="Specific test file(s) to run. If omitted, discovers all tests.",
-    )
-    parser.add_argument(
-        "--test-dir",
-        metavar="DIR",
-        help="Override config.test_dir for test discovery.",
     )
     parser.add_argument(
         "--tmp-dir",
@@ -238,14 +246,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    cfg_path = Path(args.config).resolve()
-    if not cfg_path.is_file():
-        _die(f"Config file not found: {cfg_path}")
+    # Resolve config path.
+    if args.config:
+        cfg_path = Path(args.config).resolve()
+        if not cfg_path.is_file():
+            _die(f"Config file not found: {cfg_path}")
+    else:
+        cfg_path = find_default_config()
+        if cfg_path is None:
+            _die(
+                f"No config file found. Searched for '{DEFAULT_CONFIG_NAME}' in "
+                f"'./' and './build/'. Use --config to specify one explicitly."
+            )
 
     config = load_config(cfg_path)
-
-    if args.test_dir:
-        config.test_dir = args.test_dir
 
     # Resolve test list.
     if args.tests:
@@ -264,12 +278,8 @@ def main() -> int:
         tmp_dir = Path(args.tmp_dir)
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp_ctx = None
-    elif config.tmp_dir:
-        tmp_dir = Path(config.tmp_dir)
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_ctx = None
     else:
-        tmp_ctx = tempfile.TemporaryDirectory(prefix="spirv_tester_")
+        tmp_ctx = tempfile.TemporaryDirectory(prefix="sit_")
         tmp_dir = Path(tmp_ctx.name)
 
     # Run tests.

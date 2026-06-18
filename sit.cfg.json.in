@@ -1,0 +1,13 @@
+{
+    "test_dir": "@CMAKE_SOURCE_DIR@/tests",
+    "substitutions": {
+        "%slangc":     "@SLANG_EXE@",
+        "%spirv_dis":  "@SPIRV_DIS_EXE@",
+        "%spirv_opt":  "@SPIRV_OPT_EXE@",
+        "%spirv_val":  "@SPIRV_VAL_EXE@",
+        "%check":      "@FILECHECK_EXE@",
+        "%glslang":    "@GLSLANG_EXE@",
+        "%dxc":        "@DXC_EXE@"
+    },
+    "suffixes": [".glsl", ".hlsl", ".slang", ".spvasm"]
+}
