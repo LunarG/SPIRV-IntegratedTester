@@ -33,25 +33,25 @@ This will automatically fetch and build the required dependencies (slang, SPIRV-
 ## Running Tests
 
 ```sh
-python3 spirv_tester.py build/sit.cfg.py
+python3 spirv_tester.py
 ```
 
 To run a single test:
 
 ```sh
-python3 spirv_tester.py build/sit.cfg.py tests/slang/example.slang
-```
-
-To run a specific subdirectory of tests:
-
-```sh
-python3 spirv_tester.py build/sit.cfg.py --test-dir tests/slang
+python3 spirv_tester.py tests/slang/example.slang
 ```
 
 To keep intermediate `.spv` and `.spvasm` files for inspection:
 
 ```sh
-python3 spirv_tester.py build/sit.cfg.py --tmp-dir /tmp/sit-debug
+python3 spirv_tester.py --tmp-dir /tmp/sit-debug
+```
+
+To use an explicit config file:
+
+```sh
+python3 spirv_tester.py --config build/sit.cfg.json
 ```
 
 ## Adding Tests
