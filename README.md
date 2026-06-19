@@ -42,17 +42,15 @@ To run a single test:
 python3 spirv_tester.py tests/slang/example.slang
 ```
 
-To keep intermediate `.spv` and `.spvasm` files for inspection:
-
-```sh
-python3 spirv_tester.py --tmp-dir /tmp/sit-debug
-```
-
 To use an explicit config file:
 
 ```sh
 python3 spirv_tester.py --config build/sit.cfg.json
 ```
+
+### Inspecting failures
+
+When a test fails, intermediate `.spv` and `.spvasm` artifacts are automatically saved to the `debug_dir` specified in `sit.cfg.json` (default: `sit-debug/` in the repo root). The failure message will print the exact path. The folder is cleared at the start of each run and removed entirely when all tests pass.
 
 ## Adding Tests
 

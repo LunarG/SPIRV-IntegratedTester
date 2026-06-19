@@ -1,5 +1,6 @@
 {
     "test_dir": "@CMAKE_SOURCE_DIR@/tests",
+    "debug_dir": "@CMAKE_SOURCE_DIR@/sit-debug",
     "substitutions": {
         "%slangc":     "@SLANG_EXE@",
         "%spirv_dis":  "@SPIRV_DIS_EXE@",
