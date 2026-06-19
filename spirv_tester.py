@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,7 @@ DEFAULT_CONFIG_NAME = "sit.cfg.json"
 class Config:
     def __init__(self):
         self.test_dir: str = ""
+        self.debug_dir: str = ""
         self.suffixes: list[str] = list(DEFAULT_SUFFIXES)
         # List of (pattern, replacement) tuples, e.g. ("%slangc", "/usr/bin/slangc").
         self.substitutions: list[tuple[str, str]] = []
@@ -60,8 +62,9 @@ def load_config(cfg_path: Path) -> Config:
 
     config = Config()
 
-    config.test_dir = raw.get("test_dir", str(cfg_path.parent))
-    config.suffixes = raw.get("suffixes", DEFAULT_SUFFIXES)
+    config.test_dir  = raw.get("test_dir", str(cfg_path.parent))
+    config.debug_dir = raw.get("debug_dir", "")
+    config.suffixes  = raw.get("suffixes", DEFAULT_SUFFIXES)
 
     # Build substitutions list, skipping empty values (optional tools not found).
     subs = raw.get("substitutions", {})
@@ -165,10 +168,27 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
         cmd = _apply_substitutions(run_line, config.substitutions, extra_subs)
         success, output = _run_command(cmd)
         if not success:
-            _print_failure(test_file, run_line, cmd, output)
+            debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
+            _print_failure(test_file, run_line, cmd, output, debug_path)
             return False
 
     return True
+
+
+def _save_debug_artifacts(
+    test_file: Path, tmp_dir: Path, config: Config
+) -> Path | None:
+    """Copy temp artifacts for a failed test into debug_dir. Returns the path."""
+    if not config.debug_dir:
+        return None
+
+    debug_dir = Path(config.debug_dir) / test_file.stem
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    for artifact in tmp_dir.glob(f"{test_file.stem}.*"):
+        shutil.copy2(artifact, debug_dir / artifact.name)
+
+    return debug_dir
 
 
 def _run_command(cmd: str) -> tuple[bool, str]:
@@ -190,13 +210,16 @@ def _run_command(cmd: str) -> tuple[bool, str]:
 
 
 def _print_failure(
-    test_file: Path, run_line: str, expanded_cmd: str, output: str
+    test_file: Path, run_line: str, expanded_cmd: str, output: str,
+    debug_path: Path | None = None,
 ) -> None:
     sep = "-" * 70
     print(f"\nFAIL  {test_file}")
     print(sep)
     print(f"  RUN line : {run_line}")
     print(f"  Expanded : {expanded_cmd}")
+    if debug_path:
+        print(f"  Artifacts: {debug_path}")
     if output.strip():
         print("  Output   :")
         for line in output.splitlines():
@@ -229,11 +252,6 @@ def parse_args() -> argparse.Namespace:
         metavar="TEST",
         nargs="*",
         help="Specific test file(s) to run. If omitted, discovers all tests.",
-    )
-    parser.add_argument(
-        "--tmp-dir",
-        metavar="DIR",
-        help="Directory for intermediate .spv/.spvasm files (default: system temp).",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -273,20 +291,18 @@ def main() -> int:
             _warn("No test files found.")
             return 0
 
-    # Set up temp directory.
-    if args.tmp_dir:
-        tmp_dir = Path(args.tmp_dir)
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_ctx = None
-    else:
-        tmp_ctx = tempfile.TemporaryDirectory(prefix="sit_")
-        tmp_dir = Path(tmp_ctx.name)
+    # Clear debug_dir at the start of each run.
+    if config.debug_dir:
+        debug_dir = Path(config.debug_dir)
+        if debug_dir.exists():
+            shutil.rmtree(debug_dir)
 
     # Run tests.
     passed = 0
     failed = 0
 
-    try:
+    with tempfile.TemporaryDirectory(prefix="sit_") as tmp:
+        tmp_dir = Path(tmp)
         for test_file in test_files:
             ok = run_test(test_file, config, tmp_dir)
             if ok:
@@ -295,9 +311,12 @@ def main() -> int:
                     print(f"PASS  {test_file}")
             else:
                 failed += 1
-    finally:
-        if tmp_ctx is not None:
-            tmp_ctx.cleanup()
+
+    # Clear debug_dir if everything passed.
+    if failed == 0 and config.debug_dir:
+        debug_dir = Path(config.debug_dir)
+        if debug_dir.exists():
+            shutil.rmtree(debug_dir)
 
     # Summary.
     total = passed + failed
