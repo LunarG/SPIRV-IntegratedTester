@@ -27,6 +27,27 @@ DEFAULT_SUFFIXES = [".glsl", ".hlsl", ".slang", ".spvasm"]
 # Substitutions the harness requires to be defined in the config.
 REQUIRED_SUBSTITUTIONS = ["%spirv_dis", "%check"]
 
+# Compiler substitutions that take a source file as their next argument.
+COMPILER_SUBSTITUTIONS = ["%slangc", "%glslang", "%dxc"]
+
+# Debug flags per compiler. Injected automatically if not already present.
+COMPILER_DEBUG_FLAGS = {
+    "%slangc":  "-g",
+    "%glslang": "-g",
+    "%dxc":     "-Zi",
+}
+
+# Default targets per compiler. Injected automatically if no -target flag is present.
+COMPILER_DEFAULT_TARGETS = {
+    "%slangc": "-target spirv",
+}
+
+# Pipeline stage classifications.
+STAGE_COMPILE     = "compile"
+STAGE_DISASSEMBLE = "disassemble"
+STAGE_CHECK       = "check"
+STAGE_UNKNOWN     = "unknown"
+
 # Default config file name to search for.
 DEFAULT_CONFIG_NAME = "sit.cfg.json"
 
@@ -110,20 +131,120 @@ def discover_tests(config: Config) -> list[Path]:
 # Test execution
 # ---------------------------------------------------------------------------
 
-RUN_RE = re.compile(r"^//\s*RUN:\s*(.+)$")
+RUN_RE          = re.compile(r"^//\s*RUN:\s*(.+)$")
+RUN_OVERRIDE_RE = re.compile(r"^//\s*RUN_OVERRIDE:\s*(.+)$")
 
 
-def _parse_run_lines(test_file: Path) -> list[str]:
-    """Extract all '// RUN: ...' lines from a test file."""
+def _inject_implicit_source(run_line: str) -> str:
+    """If a RUN line contains a known compiler substitution but %s does not
+    already follow it, inject %s immediately after the compiler substitution.
+    """
+    for compiler in COMPILER_SUBSTITUTIONS:
+        if compiler in run_line:
+            if not re.search(rf"{re.escape(compiler)}\s+%s", run_line):
+                return run_line.replace(compiler, f"{compiler} %s", 1)
+    return run_line
+
+
+def _inject_debug_flag(run_line: str) -> str:
+    """If a RUN line contains a known compiler substitution but no debug flag,
+    inject the appropriate debug flag immediately after the compiler substitution.
+    """
+    for compiler, flag in COMPILER_DEBUG_FLAGS.items():
+        if compiler in run_line and flag not in run_line:
+            return run_line.replace(compiler, f"{compiler} {flag}", 1)
+    return run_line
+
+
+def _inject_default_target(run_line: str) -> str:
+    """If a RUN line contains a compiler with a known default target and no
+    -target flag is present, inject the default target after the compiler.
+    """
+    for compiler, target in COMPILER_DEFAULT_TARGETS.items():
+        if compiler in run_line and "-target" not in run_line:
+            return run_line.replace(compiler, f"{compiler} {target}", 1)
+    return run_line
+
+
+def _classify_segment(segment: str) -> str:
+    """Classify a pipeline segment by its stage."""
+    for compiler in COMPILER_SUBSTITUTIONS:
+        if compiler in segment:
+            return STAGE_COMPILE
+    if "%spirv_dis" in segment:
+        return STAGE_DISASSEMBLE
+    if "%check" in segment:
+        return STAGE_CHECK
+    return STAGE_UNKNOWN
+
+
+def _split_pipeline(run_line: str) -> list[tuple[str, str]]:
+    """Split a RUN line on && and classify each segment.
+    Returns a list of (stage, segment) tuples.
+    """
+    segments = [s.strip() for s in run_line.split("&&")]
+    return [(_classify_segment(s), s) for s in segments if s]
+
+
+def _build_pipeline(run_line: str, test_file: Path) -> str:
+    """Split the RUN line into pipeline stages, fill in any missing stages,
+    and reassemble into a full shell command.
+    """
+    stages = _split_pipeline(run_line)
+    stage_map = {stage: cmd for stage, cmd in stages}
+
+    # Compile stage must be present.
+    if STAGE_COMPILE not in stage_map:
+        _die(f"{test_file}: RUN: line has no compile stage (expected %slangc, %glslang, or %dxc).")
+
+    # Build the ordered pipeline.
+    pipeline = []
+
+    # Compile stage — always first. Inject -o %spv if missing.
+    compile_cmd = stage_map[STAGE_COMPILE]
+    if "%spv" not in compile_cmd:
+        compile_cmd = f"{compile_cmd} -o %spv"
+    pipeline.append(compile_cmd)
+
+    # Unknown pass-through stages (e.g. %spirv_opt) — preserve in order.
+    for stage, cmd in stages:
+        if stage == STAGE_UNKNOWN:
+            pipeline.append(cmd)
+
+    # Disassemble stage — use default if missing.
+    if STAGE_DISASSEMBLE in stage_map:
+        pipeline.append(stage_map[STAGE_DISASSEMBLE])
+    else:
+        pipeline.append("%spirv_dis %spv -o %spvasm")
+
+    # Check stage — use default if missing.
+    if STAGE_CHECK in stage_map:
+        pipeline.append(stage_map[STAGE_CHECK])
+    else:
+        pipeline.append("%check --spvasm %spvasm --source %s")
+
+    return " && ".join(pipeline)
+
+
+def _parse_run_lines(test_file: Path) -> tuple[list[str], list[str]]:
+    """Extract all '// RUN:' and '// RUN_OVERRIDE:' lines from a test file.
+    Returns (run_lines, override_lines).
+    """
     run_lines = []
+    override_lines = []
     try:
         for line in test_file.read_text(encoding="utf-8").splitlines():
-            m = RUN_RE.match(line.strip())
+            stripped = line.strip()
+            m = RUN_RE.match(stripped)
             if m:
                 run_lines.append(m.group(1).strip())
+                continue
+            m = RUN_OVERRIDE_RE.match(stripped)
+            if m:
+                override_lines.append(m.group(1).strip())
     except OSError as e:
         _die(f"Cannot read test file {test_file}: {e}")
-    return run_lines
+    return run_lines, override_lines
 
 
 def _apply_substitutions(
@@ -147,12 +268,17 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     Run all RUN: lines in a single test file.
     Returns True if the test passed, False otherwise.
     """
-    run_lines = _parse_run_lines(test_file)
-    if not run_lines:
-        _warn(f"SKIP  {test_file} (no RUN: lines found)")
+    run_lines, override_lines = _parse_run_lines(test_file)
+
+    # Mutual exclusivity check.
+    if run_lines and override_lines:
+        _die(f"{test_file}: cannot mix RUN: and RUN_OVERRIDE: in the same file.")
+
+    if not run_lines and not override_lines:
+        _warn(f"SKIP  {test_file} (no RUN: or RUN_OVERRIDE: lines found)")
         return True  # Not a failure; just nothing to run.
 
-    # Per-test substitutions available to every RUN: line.
+    # Per-test substitutions available to RUN: and RUN_OVERRIDE: lines.
     stem = test_file.stem
     spv_out = tmp_dir / f"{stem}.spv"
     spvasm_out = tmp_dir / f"{stem}.spvasm"
@@ -164,13 +290,26 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
         "%t":      str(tmp_dir / stem),  # generic temp file prefix
     }
 
-    for run_line in run_lines:
-        cmd = _apply_substitutions(run_line, config.substitutions, extra_subs)
-        success, output = _run_command(cmd)
-        if not success:
-            debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
-            _print_failure(test_file, run_line, cmd, output, debug_path)
-            return False
+    if run_lines:
+        if len(run_lines) > 1:
+            _die(f"{test_file}: multiple RUN: lines found. Only one RUN: line is supported per test.")
+        run_line = run_lines[0]
+        run_line = _inject_implicit_source(run_line)
+        run_line = _inject_default_target(run_line)
+        run_line = _inject_debug_flag(run_line)
+        run_line = _build_pipeline(run_line, test_file)
+    else:
+        if len(override_lines) > 1:
+            _die(f"{test_file}: multiple RUN_OVERRIDE: lines found. Only one RUN_OVERRIDE: line is supported per test.")
+        # RUN_OVERRIDE: skip all smart pipeline logic, just substitute and run.
+        run_line = override_lines[0]
+
+    cmd = _apply_substitutions(run_line, config.substitutions, extra_subs)
+    success, output = _run_command(cmd)
+    if not success:
+        debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
+        _print_failure(test_file, run_line, cmd, output, debug_path)
+        return False
 
     return True
 

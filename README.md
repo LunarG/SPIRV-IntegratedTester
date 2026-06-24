@@ -58,34 +58,29 @@ Adding a test is as simple as dropping a shader file into the appropriate subdir
 
 ```
 tests/
-  slang/   — Slang shaders
-  glsl/    — GLSL shaders
-  hlsl/    — HLSL shaders
+  slang/      — Slang shaders
+  glsl/       — GLSL shaders
+  hlsl/       — HLSL shaders
+  internal/   — Harness self-tests (verbose and permutation RUN lines)
 ```
 
 Each test file is self-contained. A `// RUN:` line defines the compilation pipeline and a series of `// CHECK:` lines define the SPIR-V patterns to verify. No registration or build system changes are needed — the harness discovers test files automatically.
 
-Here is a minimal Slang example:
+The harness is smart about the `// RUN:` line — you only need to specify the compiler. The target, source file, debug flag, SPIR-V output, disassembly, and check steps are all handled automatically. For example, with slangc:
 
 ```slang
-// RUN: %slangc %s -target spirv -stage compute -g -o %spv && %spirv_dis %spv -o %spvasm && %check --spvasm %spvasm --source %s
-
-// CHECK: [[DATA_STR:%[0-9]+]] = OpString "data"
-// CHECK: [[DATA_MEMBER:%[0-9]+]] = OpExtInst {{.*}} DebugTypeMember [[DATA_STR]]
-
-struct SSBO {
-    float4 data;
-};
-
-[[vk::binding(1, 0)]]
-RWStructuredBuffer<SSBO> ssbo;
-
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void main() {
-    ssbo[0].data = float4(0.0);
-}
+// RUN: %slangc
 ```
+
+If you need full control over the pipeline, you can use `RUN_OVERRIDE:` instead. This skips all smart pipeline logic and runs the command exactly as written after substitution:
+
+```slang
+// RUN_OVERRIDE: %slangc %s -target spirv -stage compute -g -o %spv && %spirv_dis %spv -o %spvasm && %check --spvasm %spvasm --source %s
+```
+
+`RUN:` and `RUN_OVERRIDE:` are mutually exclusive — a test file may only contain one or the other, not both.
+
+The `tests/internal/` directory contains tests that exercise various RUN line permutations and are used to regression test the harness itself.
 
 ### Available substitutions
 
