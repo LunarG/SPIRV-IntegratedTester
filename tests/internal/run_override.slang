@@ -1,4 +1,4 @@
-// RUN: %slangc
+// RUN_OVERRIDE: %slangc %s -target spirv -stage compute -g -o %spv && %spirv_dis %spv -o %spvasm && %check --spvasm %spvasm --source %s
 
 // Capture the ID for the string "data" (the struct member name).
 // CHECK: [[DATA_STR:%[0-9]+]] = OpString "data"
