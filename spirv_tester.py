@@ -22,7 +22,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 # Extensions the harness will treat as test files if not specified in config.
-DEFAULT_SUFFIXES = [".glsl", ".hlsl", ".slang", ".spvasm"]
+# Includes glslang's bare stage suffixes (glslang infers the shader stage
+# directly from these, the same idea as the .<stage>.glsl compound suffix).
+DEFAULT_SUFFIXES = [
+    ".glsl", ".hlsl", ".slang", ".spvasm",
+    ".vert", ".tesc", ".tese", ".geom", ".frag", ".comp",
+    ".mesh", ".task",
+    ".rgen", ".rint", ".rahit", ".rchit", ".rmiss", ".rcall",
+]
 
 # Substitutions the harness requires to be defined in the config.
 REQUIRED_SUBSTITUTIONS = ["%spirv_dis", "%check"]
@@ -31,15 +38,26 @@ REQUIRED_SUBSTITUTIONS = ["%spirv_dis", "%check"]
 COMPILER_SUBSTITUTIONS = ["%slangc", "%glslang", "%dxc"]
 
 # Debug flags per compiler. Injected automatically if not already present.
+# dxc note: -Zi alone only emits legacy debug info, not the
+# NonSemantic.Shader.DebugInfo.100 instructions this harness tests.
 COMPILER_DEBUG_FLAGS = {
     "%slangc":  "-g",
-    "%glslang": "-g",
-    "%dxc":     "-Zi",
+    "%glslang": "-gVS",
+    "%dxc":     "-Zi -fspv-debug=vulkan-with-source",
 }
 
-# Default targets per compiler. Injected automatically if no -target flag is present.
+# Default flags injected per compiler if not already present, as lists of
+# (existence_check, flag) pairs. Only flags safe to assume go here.
 COMPILER_DEFAULT_TARGETS = {
-    "%slangc": "-target spirv",
+    "%slangc":  [("-target", "-target spirv")],
+    "%glslang": [("-V", "-V")],
+    "%dxc":     [("-spirv", "-spirv"), ("-E", "-E main")],
+}
+
+# Output-file flags per compiler. Defaults to "-o" if not listed here.
+# dxc note: dxc has no plain -o flag, only -Fo.
+COMPILER_OUTPUT_FLAGS = {
+    "%dxc": "-Fo",
 }
 
 # Pipeline stage classifications.
@@ -157,12 +175,17 @@ def _inject_debug_flag(run_line: str) -> str:
 
 
 def _inject_default_target(run_line: str) -> str:
-    """If a RUN line contains a compiler with a known default target and no
-    -target flag is present, inject the default target after the compiler.
+    """If a RUN line contains a compiler with known default flags, inject
+    whichever of those flags aren't already present, immediately after the
+    compiler.
     """
-    for compiler, target in COMPILER_DEFAULT_TARGETS.items():
-        if compiler in run_line and "-target" not in run_line:
-            return run_line.replace(compiler, f"{compiler} {target}", 1)
+    for compiler, defaults in COMPILER_DEFAULT_TARGETS.items():
+        if compiler not in run_line:
+            continue
+        for check, flag in defaults:
+            if check not in run_line:
+                run_line = run_line.replace(compiler, f"{compiler} {flag}", 1)
+        return run_line
     return run_line
 
 
@@ -186,6 +209,17 @@ def _split_pipeline(run_line: str) -> list[tuple[str, str]]:
     return [(_classify_segment(s), s) for s in segments if s]
 
 
+def _compiler_output_flag(compile_cmd: str) -> str:
+    """Return the output-file flag for whichever compiler appears in this
+    compile stage. Defaults to "-o" if that compiler isn't listed in
+    COMPILER_OUTPUT_FLAGS.
+    """
+    for compiler in COMPILER_SUBSTITUTIONS:
+        if compiler in compile_cmd:
+            return COMPILER_OUTPUT_FLAGS.get(compiler, "-o")
+    return "-o"
+
+
 def _build_pipeline(run_line: str, test_file: Path) -> str:
     """Split the RUN line into pipeline stages, fill in any missing stages,
     and reassemble into a full shell command.
@@ -200,10 +234,11 @@ def _build_pipeline(run_line: str, test_file: Path) -> str:
     # Build the ordered pipeline.
     pipeline = []
 
-    # Compile stage — always first. Inject -o %spv if missing.
+    # Compile stage, always first. Inject the compiler's output flag if missing.
     compile_cmd = stage_map[STAGE_COMPILE]
     if "%spv" not in compile_cmd:
-        compile_cmd = f"{compile_cmd} -o %spv"
+        output_flag = _compiler_output_flag(compile_cmd)
+        compile_cmd = f"{compile_cmd} {output_flag} %spv"
     pipeline.append(compile_cmd)
 
     # Unknown pass-through stages (e.g. %spirv_opt) — preserve in order.
@@ -263,6 +298,18 @@ def _apply_substitutions(
     return command
 
 
+def _missing_compiler(text: str, config: Config) -> str | None:
+    """If `text` references a compiler substitution (%slangc, %glslang, %dxc)
+    that isn't available in this config (i.e. that compiler wasn't found at
+    configure time), return that substitution. Otherwise return None.
+    """
+    defined = {pattern for pattern, _ in config.substitutions}
+    for compiler in COMPILER_SUBSTITUTIONS:
+        if compiler in text and compiler not in defined:
+            return compiler
+    return None
+
+
 def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     """
     Run all RUN: lines in a single test file.
@@ -277,6 +324,13 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     if not run_lines and not override_lines:
         _warn(f"SKIP  {test_file} (no RUN: or RUN_OVERRIDE: lines found)")
         return True  # Not a failure; just nothing to run.
+
+    # Skip (don't fail) tests whose compiler isn't available on this system,
+    # e.g. a .slang test when slang wasn't found/installed.
+    missing = _missing_compiler(run_lines[0] if run_lines else override_lines[0], config)
+    if missing:
+        _warn(f"SKIP  {test_file} (compiler for {missing} is not available)")
+        return True
 
     # Per-test substitutions available to RUN: and RUN_OVERRIDE: lines.
     stem = test_file.stem
@@ -302,6 +356,14 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
         if len(override_lines) > 1:
             _die(f"{test_file}: multiple RUN_OVERRIDE: lines found. Only one RUN_OVERRIDE: line is supported per test.")
         # RUN_OVERRIDE: skip all smart pipeline logic, just substitute and run.
+        # TODO: add a tests/internal/ .spvasm case using
+        #   RUN_OVERRIDE: %check --spvasm %s --source %s
+        # to confirm %check can validate pre-generated SPIR-V disassembly text
+        # directly, with no compile or spirv-dis stage (both --spvasm and
+        # --source pointing at the same file). This is the intended path for
+        # someone supplying their own pre-generated SPIR-V instead of
+        # compiling from source. Should work today based on how run_test()
+        # is structured, but has not actually been exercised.
         run_line = override_lines[0]
 
     cmd = _apply_substitutions(run_line, config.substitutions, extra_subs)
@@ -417,6 +479,13 @@ def main() -> int:
             )
 
     config = load_config(cfg_path)
+
+    available_compilers = {p for p, _ in config.substitutions} & set(COMPILER_SUBSTITUTIONS)
+    if not available_compilers:
+        _warn(
+            "No shader compilers (slang, glslang, dxc) are configured. "
+            "All tests will be skipped."
+        )
 
     # Resolve test list.
     if args.tests:

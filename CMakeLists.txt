@@ -92,13 +92,11 @@ else()
     # Fall back to whatever is on the system PATH.
     find_program(SLANG_EXE slangc)
     if(NOT SLANG_EXE)
-        message(FATAL_ERROR
-            "Could not find slangc. Either:\n"
-            "  - Set SPIRV_TESTER_SLANG_PATH to a slang installation directory\n"
-            "  - Enable SPIRV_TESTER_FETCH_SLANG to download one automatically\n"
-            "  - Ensure slangc is on your system PATH")
+        message(STATUS "slangc not found; slang tests will not run")
+        set(SLANG_EXE "")
+    else()
+        message(STATUS "Using system slang: ${SLANG_EXE}")
     endif()
-    message(STATUS "Using system slang: ${SLANG_EXE}")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -179,24 +177,151 @@ else()
     message(STATUS "Using system SPIRV-Tools: ${SPIRV_DIS_EXE}")
 endif()
 
-# todo:
 # ---------------------------------------------------------------------------
-# Optional tools: glslang, dxc
+# glslang
+#
+# Resolution priority:
+#   1. SPIRV_TESTER_GLSLANG_PATH: user-specified directory, always wins
+#   2. FetchContent: if SPIRV_TESTER_FETCH_GLSLANG is ON (default)
+#   3. find_program: system PATH, last resort
 # ---------------------------------------------------------------------------
-find_program(GLSLANG_EXE glslang)
-if(GLSLANG_EXE)
-    message(STATUS "Found glslang: ${GLSLANG_EXE}")
+set(SPIRV_TESTER_GLSLANG_PATH "" CACHE PATH
+    "Path to a local glslang installation directory (bin/glslang[.exe] must exist inside).")
+option(SPIRV_TESTER_FETCH_GLSLANG
+    "Fetch glslang via FetchContent if not found via SPIRV_TESTER_GLSLANG_PATH"
+    ON)
+
+if(SPIRV_TESTER_GLSLANG_PATH)
+    # User explicitly pointed us at a glslang installation. Use it and skip everything else.
+    if(WIN32)
+        set(GLSLANG_EXE "${SPIRV_TESTER_GLSLANG_PATH}/bin/glslang.exe")
+    else()
+        set(GLSLANG_EXE "${SPIRV_TESTER_GLSLANG_PATH}/bin/glslang")
+    endif()
+    if(NOT EXISTS "${GLSLANG_EXE}")
+        message(FATAL_ERROR
+            "SPIRV_TESTER_GLSLANG_PATH is set to '${SPIRV_TESTER_GLSLANG_PATH}' "
+            "but no glslang executable was found at '${GLSLANG_EXE}'.")
+    endif()
+    message(STATUS "Using user-provided glslang: ${GLSLANG_EXE}")
+
+elseif(SPIRV_TESTER_FETCH_GLSLANG)
+    # Fetch a known-good glslang release.
+    set(GLSLANG_VERSION "16.5.0")
+    if(WIN32)
+        set(GLSLANG_ARCHIVE "glslang-${GLSLANG_VERSION}-windows-x86_64-release.zip")
+        set(GLSLANG_SHA256  "06b71298b750268c127f2ee7ae0ef7525e2068120c6c8a3a08b2f58ca6f325ce")
+        set(GLSLANG_EXE_RELATIVE "bin/glslang.exe")
+    elseif(APPLE)
+        set(GLSLANG_ARCHIVE "glslang-${GLSLANG_VERSION}-macos-universal-release.tar.gz")
+        set(GLSLANG_SHA256  "0f0b8ae3873d1f182ecd1806cd1a10fee3f9965896a660b7a0bbe6bdd9e1f46d")
+        set(GLSLANG_EXE_RELATIVE "bin/glslang")
+    else()
+        set(GLSLANG_ARCHIVE "glslang-${GLSLANG_VERSION}-linux-x86_64-release.tar.gz")
+        set(GLSLANG_SHA256  "b9b1f96acb898a62251b171f7695efcecfc206a530299054071919b06820f657")
+        set(GLSLANG_EXE_RELATIVE "bin/glslang")
+    endif()
+    FetchContent_Declare(
+        glslang_binary
+        URL "https://github.com/KhronosGroup/glslang/releases/download/${GLSLANG_VERSION}/${GLSLANG_ARCHIVE}"
+        URL_HASH SHA256=${GLSLANG_SHA256}
+    )
+    FetchContent_MakeAvailable(glslang_binary)
+    set(GLSLANG_EXE "${glslang_binary_SOURCE_DIR}/${GLSLANG_EXE_RELATIVE}")
+    message(STATUS "Using FetchContent glslang: ${GLSLANG_EXE}")
+
 else()
-    message(STATUS "glslang not found — GLSL tests will not run")
-    set(GLSLANG_EXE "")
+    # Fall back to whatever is on the system PATH.
+    find_program(GLSLANG_EXE glslang)
+    if(NOT GLSLANG_EXE)
+        message(STATUS "glslang not found; GLSL/HLSL tests will not run")
+        set(GLSLANG_EXE "")
+    else()
+        message(STATUS "Using system glslang: ${GLSLANG_EXE}")
+    endif()
 endif()
 
-find_program(DXC_EXE dxc)
-if(DXC_EXE)
-    message(STATUS "Found dxc: ${DXC_EXE}")
+# ---------------------------------------------------------------------------
+# dxc
+#
+# Resolution priority:
+#   1. SPIRV_TESTER_DXC_PATH: user-specified directory, always wins
+#   2. FetchContent: if SPIRV_TESTER_FETCH_DXC is ON (default),
+#                     Windows/Linux only (see note below)
+#   3. find_program: system PATH, last resort
+#
+# Note: Microsoft only publishes official dxc release binaries for Windows
+# and Linux (x86_64); there is no official macOS build. On macOS,
+# FetchContent is skipped regardless of SPIRV_TESTER_FETCH_DXC and we fall
+# straight through to the system PATH search.
+# ---------------------------------------------------------------------------
+set(SPIRV_TESTER_DXC_PATH "" CACHE PATH
+    "Path to a local dxc installation directory (bin/dxc[.exe] must exist inside).")
+option(SPIRV_TESTER_FETCH_DXC
+    "Fetch dxc via FetchContent if not found via SPIRV_TESTER_DXC_PATH (Windows/Linux only; no official macOS binary)"
+    ON)
+
+if(SPIRV_TESTER_DXC_PATH)
+    # User explicitly pointed us at a dxc installation. Use it and skip everything else.
+    if(WIN32)
+        set(DXC_EXE "${SPIRV_TESTER_DXC_PATH}/bin/dxc.exe")
+    else()
+        set(DXC_EXE "${SPIRV_TESTER_DXC_PATH}/bin/dxc")
+    endif()
+    if(NOT EXISTS "${DXC_EXE}")
+        message(FATAL_ERROR
+            "SPIRV_TESTER_DXC_PATH is set to '${SPIRV_TESTER_DXC_PATH}' "
+            "but no dxc executable was found at '${DXC_EXE}'.")
+    endif()
+    message(STATUS "Using user-provided dxc: ${DXC_EXE}")
+
+elseif(SPIRV_TESTER_FETCH_DXC AND NOT APPLE)
+    # Fetch a known-good dxc release (Windows x64 / Linux x86_64 only).
+    set(DXC_TAG "v1.9.2602.24")
+    if(WIN32)
+        set(DXC_ARCHIVE "dxc_2026_05_27.zip")
+        set(DXC_SHA256  "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4")
+        set(DXC_EXE_RELATIVE "bin/x64/dxc.exe")
+    else()
+        set(DXC_ARCHIVE "linux_dxc_2026_05_26.x86_64.tar.gz")
+        set(DXC_SHA256  "928b3e9986d11dc4279050e02340950c29bcbd1e5efb9d3ded9669dade37639d")
+        set(DXC_EXE_RELATIVE "bin/dxc")
+    endif()
+    FetchContent_Declare(
+        dxc_binary
+        URL "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_TAG}/${DXC_ARCHIVE}"
+        URL_HASH SHA256=${DXC_SHA256}
+    )
+    FetchContent_MakeAvailable(dxc_binary)
+    set(DXC_EXE "${dxc_binary_SOURCE_DIR}/${DXC_EXE_RELATIVE}")
+    message(STATUS "Using FetchContent dxc: ${DXC_EXE}")
+
 else()
-    message(STATUS "dxc not found — HLSL tests will not run")
-    set(DXC_EXE "")
+    # Fall back to whatever is on the system PATH. This is also the path
+    # always taken on macOS (see note above).
+    find_program(DXC_EXE dxc)
+    if(NOT DXC_EXE)
+        message(STATUS "dxc not found; HLSL tests will not run")
+        set(DXC_EXE "")
+    else()
+        message(STATUS "Using system dxc: ${DXC_EXE}")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# All three frontend compilers are optional individually, but at least one
+# is needed for any tests to actually run. Warn (don't fail configure) if
+# none were found.
+# ---------------------------------------------------------------------------
+if(NOT SLANG_EXE AND NOT GLSLANG_EXE AND NOT DXC_EXE)
+    message(WARNING
+        "No shader compilers were found (slang, glslang, dxc). "
+        "No tests will be able to run.\n"
+        "To fix this, either:\n"
+        "  - Install at least one of slang, glslang, or dxc and ensure it's on your PATH\n"
+        "  - Set SPIRV_TESTER_SLANG_PATH / SPIRV_TESTER_GLSLANG_PATH / SPIRV_TESTER_DXC_PATH to an existing installation\n"
+        "  - Enable SPIRV_TESTER_FETCH_SLANG / SPIRV_TESTER_FETCH_GLSLANG / SPIRV_TESTER_FETCH_DXC (default: ON, "
+        "though FETCH_DXC has no effect on macOS, see note above)")
 endif()
 
 # ---------------------------------------------------------------------------
