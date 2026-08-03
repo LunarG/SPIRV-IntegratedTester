@@ -10,5 +10,10 @@
         "%glslang":    "@GLSLANG_EXE@",
         "%dxc":        "@DXC_EXE@"
     },
-    "suffixes": [".glsl", ".hlsl", ".slang", ".spvasm"]
+    "suffixes": [
+        ".glsl", ".hlsl", ".slang", ".spvasm",
+        ".vert", ".tesc", ".tese", ".geom", ".frag", ".comp",
+        ".mesh", ".task",
+        ".rgen", ".rint", ".rahit", ".rchit", ".rmiss", ".rcall"
+    ]
 }
