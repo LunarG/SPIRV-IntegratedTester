@@ -1,15 +1,15 @@
 // RUN: %slangc
 
-// Capture the ID for the string "data" (the struct member name).
+// The string "data" is the name of the struct member.
 // CHECK: [[DATA_STR:%[0-9]+]] = OpString "data"
 
-// Capture the DebugTypeMember that references the "data" string.
+// The DebugTypeMember for the struct member names this string.
 // CHECK: [[DATA_MEMBER:%[0-9]+]] = OpExtInst {{.*}} DebugTypeMember [[DATA_STR]]
 
-// Verify a DebugLine is emitted before the store.
+// The compiler emits a DebugLine before the store.
 // CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugLine
 
-// Verify the two chained AccessChains and the Store.
+// The store goes through two chained access chains into the buffer.
 // CHECK: [[PTR1:%[0-9]+]] = OpAccessChain {{.*}} %ssbo
 // CHECK-NEXT: [[PTR2:%[0-9]+]] = OpAccessChain {{.*}} [[PTR1]]
 // CHECK-NEXT: OpStore [[PTR2]]
