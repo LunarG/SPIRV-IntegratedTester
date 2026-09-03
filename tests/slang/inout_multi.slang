@@ -1,8 +1,29 @@
 // RUN: %slangc
+// XFAIL: SPIRV-Tools#6718, DebugValue references OpUndef after spirv-opt
+
+// This test is expected to fail today. The assertions below state what the
+// tooling must emit. Four of them do not hold yet.
+//
+// The Slang default runs the SPIRV-Tools optimizer. A pass in that optimizer
+// drops the Value operand of four DebugValue instructions and puts one bare
+// OpUndef in the place of each. The correct value exists in the module at all
+// four points, so no information is lost. Only the reference is wrong.
+//
+// This shader has two inout parameters. The defect appears one time for each
+// parameter on entry, and one time for each parameter after the call. The
+// single-parameter inout tests show the same defect two times.
+//
+// The single OpUndef also destroys the distinction between `a` and `b`. Both
+// parameters name the same value on entry. Both variables in main name that
+// same value after the call.
+//
+// glslang with spirv-opt emits no OpUndef for this same shader shape, and it
+// keeps `a` and `b` distinct. So the assertions below describe an achievable
+// result and not a guess. See
+// https://github.com/KhronosGroup/SPIRV-Tools/issues/6718.
 
 // A DebugLocalVariable instruction must describe each of `a` and `b` in main,
 // and another must describe each parameter of addOneToBoth.
-// CHECK: [[UNDEF:%[0-9]+]] = OpUndef %v4float
 // CHECK: %a = OpExtInst {{.*}} DebugLocalVariable
 // CHECK: %b = OpExtInst {{.*}} DebugLocalVariable
 // CHECK: %b_0 = OpExtInst {{.*}} DebugLocalVariable
@@ -17,13 +38,10 @@
 // CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b [[LOAD_B]]
 
 // main calls addOneToBoth with the values of `a` and `b`. The Value operand of
-// DebugValue for both parameters is the same bare OpUndef value. It is not the
-// real argument values that main passed in.
-//
-// This is the known defect from the single-parameter inout test. It appears
-// again here, one time for each parameter.
-// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b_0 [[UNDEF]]
-// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %a_0 [[UNDEF]]
+// DebugValue for each parameter must be the value that main loaded for the
+// matching variable. The two parameters do not exchange values.
+// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b_0 [[LOAD_B]]
+// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %a_0 [[LOAD_A]]
 
 // A real OpFAdd instruction adds one to each parameter. After these sums
 // exist, the Value operand of DebugValue for each parameter obeys the
@@ -34,10 +52,10 @@
 // CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b_0 [[SUM_B]]
 
 // After addOneToBoth returns, the Value operand of DebugValue for `a` and for
-// `b` in main is the same bare OpUndef value again. It is not the sums
-// above.
-// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b [[UNDEF]]
-// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %a [[UNDEF]]
+// `b` in main must be the matching sum above. Each inout parameter writes its
+// value back to its own variable.
+// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %b [[SUM_B]]
+// CHECK: {{%[0-9]+}} = OpExtInst {{.*}} DebugValue %a [[SUM_A]]
 
 struct SSBO {
     float4 dataA;

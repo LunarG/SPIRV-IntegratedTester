@@ -64,7 +64,9 @@ python3 spirv_tester.py --config build/sit.cfg.json
 
 ### Inspecting failures
 
-When a test fails, intermediate `.spv` and `.spvasm` artifacts are automatically saved to the `debug_dir` specified in `sit.cfg.json` (default: `sit-debug/` in the repo root). The failure message will print the exact path. The folder is cleared at the start of each run and removed entirely when all tests pass.
+When a test fails, intermediate `.spv` and `.spvasm` artifacts are automatically saved to the `debug_dir` specified in `sit.cfg.json` (default: `sit-debug/` in the repo root). The failure message will print the exact path. The folder is cleared at the start of each run and removed once no unexpected results remain.
+
+Expected failures are the exception: a test carrying an `// XFAIL:` directive saves no artifacts, because that outcome is already understood. See [Documenting a known defect](#documenting-a-known-defect-the--xfail-directive). To inspect the SPIR-V for one, run its `RUN:` pipeline by hand, or comment out the `XFAIL:` line temporarily.
 
 ## Adding Tests
 
@@ -93,6 +95,43 @@ If you need full control over the pipeline, you can use `RUN_OVERRIDE:` instead.
 ```
 
 `RUN:` and `RUN_OVERRIDE:` are mutually exclusive — a test file may only contain one or the other, not both.
+
+### Documenting a known defect: the `// XFAIL:` directive
+
+Some tests document a defect that is not fixed yet. Those tests carry one `// XFAIL: <reason>` line:
+
+```slang
+// RUN: %slangc
+// XFAIL: SPIRV-Tools#6718, DebugValue references OpUndef after spirv-opt
+```
+
+The `<reason>` is required. A URL inside the reason is optional. The directive is file-level, and only one is supported per file, matching the existing rule for `RUN:`.
+
+**The `CHECK:` lines still assert what the tooling must emit, not what it emits today.** So the test genuinely fails, and the reason records why the correct output does not appear yet. This polarity is deliberate: when the defect is fixed upstream, the test starts passing on its own and needs no rewrite.
+
+#### How results are reported
+
+| Status | Meaning | Effect on the suite |
+|---|---|---|
+| `XFAIL` | A test with the directive failed, as expected | Not a failure. Exit code stays 0 |
+| `XPASS` | A test with the directive passed | **A failure.** Exit code is non-zero |
+
+An expected failure prints one line naming the reason, so the defect stays visible on every run:
+
+```
+XFAIL tests/slang/inout_scalar.slang (SPIRV-Tools#6718, DebugValue references OpUndef after spirv-opt)
+```
+
+Run with `-v` to see the full effcee diagnostic instead. Artifacts are not copied to `debug_dir` for an expected failure.
+
+An unexpected pass is the payoff of the directive. It means one of two things, and you need to find out which before you act:
+
+1. The defect was fixed upstream. Remove the `XFAIL:` line.
+2. A `CHECK:` line was weakened until it matched. Restore it.
+
+#### Before you write one
+
+An `XFAIL` test asserts output that does not exist yet, so it can accidentally demand something the tooling is not permitted to do. `NonSemantic.Shader.DebugInfo.100` instructions are non-semantic and must never change the semantic instructions of a module. See the "Asserting future behavior" section of `CLAUDE.md` for the two conditions an assertion must satisfy, and run `python3 check_debug_operands.py <test>` to report them.
 
 ### Design principle: the harness never guesses stage or profile
 
