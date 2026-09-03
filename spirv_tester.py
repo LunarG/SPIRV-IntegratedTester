@@ -66,6 +66,17 @@ STAGE_DISASSEMBLE = "disassemble"
 STAGE_CHECK       = "check"
 STAGE_UNKNOWN     = "unknown"
 
+# run_test() result statuses. A skipped test is deliberately distinct from a
+# passing one: it never ran, so counting it as a pass overstates coverage.
+STATUS_PASS = "PASS"
+STATUS_FAIL = "FAIL"
+STATUS_SKIP = "SKIP"
+# A test with an XFAIL: directive is expected to fail. XFAIL is that expected
+# outcome and is not a failure. XPASS means such a test passed anyway, which is
+# a failure: the defect it documents is gone, or a CHECK line has been weakened.
+STATUS_XFAIL = "XFAIL"
+STATUS_XPASS = "XPASS"
+
 # Default config file name to search for.
 DEFAULT_CONFIG_NAME = "sit.cfg.json"
 
@@ -151,6 +162,9 @@ def discover_tests(config: Config) -> list[Path]:
 
 RUN_RE          = re.compile(r"^//\s*RUN:\s*(.+)$")
 RUN_OVERRIDE_RE = re.compile(r"^//\s*RUN_OVERRIDE:\s*(.+)$")
+# Deliberately '(.*)' rather than '(.+)': an XFAIL: line with no reason must be
+# reported as an error, not silently ignored because the pattern did not match.
+XFAIL_RE        = re.compile(r"^//\s*XFAIL:\s*(.*)$")
 
 
 def _inject_implicit_source(run_line: str) -> str:
@@ -282,6 +296,33 @@ def _parse_run_lines(test_file: Path) -> tuple[list[str], list[str]]:
     return run_lines, override_lines
 
 
+def _parse_xfail(test_file: Path) -> str | None:
+    """Extract the '// XFAIL: <reason>' directive from a test file.
+
+    Returns the reason, or None when the file carries no such directive. A test
+    with this directive is expected to fail: its CHECK lines state what the
+    tooling must emit, and the reason records why it does not emit that yet.
+    """
+    reasons = []
+    try:
+        for line in test_file.read_text(encoding="utf-8").splitlines():
+            m = XFAIL_RE.match(line.strip())
+            if m:
+                reasons.append(m.group(1).strip())
+    except OSError as e:
+        _die(f"Cannot read test file {test_file}: {e}")
+
+    if not reasons:
+        return None
+    if len(reasons) > 1:
+        _die(f"{test_file}: multiple XFAIL: lines found. "
+             f"Only one XFAIL: line is supported per test.")
+    if not reasons[0]:
+        _die(f"{test_file}: XFAIL: requires a reason. For example: "
+             f"'// XFAIL: SPIRV-Tools#6718, DebugValue references OpUndef'.")
+    return reasons[0]
+
+
 def _apply_substitutions(
     command: str,
     substitutions: list[tuple[str, str]],
@@ -310,10 +351,12 @@ def _missing_compiler(text: str, config: Config) -> str | None:
     return None
 
 
-def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
+def run_test(
+    test_file: Path, config: Config, tmp_dir: Path, verbose: bool = False
+) -> str:
     """
     Run all RUN: lines in a single test file.
-    Returns True if the test passed, False otherwise.
+    Returns one of the STATUS_* values.
     """
     run_lines, override_lines = _parse_run_lines(test_file)
 
@@ -321,16 +364,20 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     if run_lines and override_lines:
         _die(f"{test_file}: cannot mix RUN: and RUN_OVERRIDE: in the same file.")
 
+    # Parsed and validated here so a malformed directive is an error even for a
+    # test that never runs.
+    xfail_reason = _parse_xfail(test_file)
+
     if not run_lines and not override_lines:
         _warn(f"SKIP  {test_file} (no RUN: or RUN_OVERRIDE: lines found)")
-        return True  # Not a failure; just nothing to run.
+        return STATUS_SKIP  # Not a failure; just nothing to run.
 
     # Skip (don't fail) tests whose compiler isn't available on this system,
     # e.g. a .slang test when slang wasn't found/installed.
     missing = _missing_compiler(run_lines[0] if run_lines else override_lines[0], config)
     if missing:
         _warn(f"SKIP  {test_file} (compiler for {missing} is not available)")
-        return True
+        return STATUS_SKIP
 
     # Per-test substitutions available to RUN: and RUN_OVERRIDE: lines.
     stem = test_file.stem
@@ -369,11 +416,28 @@ def run_test(test_file: Path, config: Config, tmp_dir: Path) -> bool:
     cmd = _apply_substitutions(run_line, config.substitutions, extra_subs)
     success, output = _run_command(cmd)
     if not success:
+        if xfail_reason:
+            # An expected failure. The diagnostic is quiet by default, because
+            # this outcome is already understood and would otherwise be noise on
+            # every run. Under -v the full report is available instead.
+            #
+            # No artifacts are saved either way. With no unexpected results,
+            # main() removes debug_dir before anyone could read them.
+            if verbose:
+                _print_failure(test_file, run_line, cmd, output,
+                               label=STATUS_XFAIL, reason=xfail_reason)
+            else:
+                print(f"XFAIL {test_file} ({xfail_reason})")
+            return STATUS_XFAIL
         debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
         _print_failure(test_file, run_line, cmd, output, debug_path)
-        return False
+        return STATUS_FAIL
 
-    return True
+    if xfail_reason:
+        _print_xpass(test_file, xfail_reason)
+        return STATUS_XPASS
+
+    return STATUS_PASS
 
 
 def _save_debug_artifacts(
@@ -410,13 +474,36 @@ def _run_command(cmd: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _print_xpass(test_file: Path, reason: str) -> None:
+    """Report a test that carries an XFAIL: directive but passed anyway."""
+    sep = "-" * 70
+    print(f"\nXPASS {test_file}")
+    print(sep)
+    print("  This test has an XFAIL: directive, but it passed.")
+    print(f"  Reason on file: {reason}")
+    print("  Find out why before you act. If the defect is fixed, remove the")
+    print("  XFAIL: line. If it is not fixed, a CHECK line has probably been")
+    print("  weakened until it matched.")
+    print(sep)
+
+
 def _print_failure(
     test_file: Path, run_line: str, expanded_cmd: str, output: str,
-    debug_path: Path | None = None,
+    debug_path: Path | None = None, label: str = STATUS_FAIL,
+    reason: str | None = None,
 ) -> None:
+    """Print the diagnostic for a failed test.
+
+    `label` and `reason` let an expected failure reuse this report under -v,
+    where the same detail is what a maintainer needs to investigate one.
+    """
     sep = "-" * 70
-    print(f"\nFAIL  {test_file}")
+    # Pad the label so FAIL and XFAIL both occupy the same column as the PASS
+    # and SKIP lines printed elsewhere.
+    print(f"\n{label:<5} {test_file}")
     print(sep)
+    if reason:
+        print(f"  XFAIL    : {reason}")
     print(f"  RUN line : {run_line}")
     print(f"  Expanded : {expanded_cmd}")
     if debug_path:
@@ -457,7 +544,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
-        help="Print PASS results as well as failures.",
+        help="Print PASS results, and the full diagnostic for expected failures.",
     )
     return parser.parse_args()
 
@@ -508,35 +595,54 @@ def main() -> int:
     # Run tests.
     passed = 0
     failed = 0
+    skipped = 0
+    xfailed = 0
+    xpassed = 0
 
     with tempfile.TemporaryDirectory(prefix="sit_") as tmp:
         tmp_dir = Path(tmp)
         for test_file in test_files:
-            ok = run_test(test_file, config, tmp_dir)
-            if ok:
+            status = run_test(test_file, config, tmp_dir, verbose=args.verbose)
+            if status == STATUS_PASS:
                 passed += 1
                 if args.verbose:
                     print(f"PASS  {test_file}")
+            elif status == STATUS_SKIP:
+                skipped += 1
+            elif status == STATUS_XFAIL:
+                xfailed += 1
+            elif status == STATUS_XPASS:
+                xpassed += 1
             else:
                 failed += 1
 
-    # Clear debug_dir if everything passed.
-    if failed == 0 and config.debug_dir:
+    # An expected failure is not a problem. A real failure and an unexpected
+    # pass both are, and both must show in the exit code.
+    unexpected = failed + xpassed
+
+    # Clear debug_dir if nothing unexpected happened.
+    if unexpected == 0 and config.debug_dir:
         debug_dir = Path(config.debug_dir)
         if debug_dir.exists():
             shutil.rmtree(debug_dir)
 
     # Summary.
-    total = passed + failed
+    total = passed + failed + skipped + xfailed + xpassed
     print(f"\n{'=' * 70}")
     print(f"Results: {passed}/{total} passed", end="")
     if failed:
-        print(f", {failed} FAILED")
-    else:
-        print()
+        print(f", {failed} FAILED", end="")
+    if xpassed:
+        print(f", {xpassed} XPASS", end="")
+    if xfailed:
+        plural = "" if xfailed == 1 else "s"
+        print(f", {xfailed} expected failure{plural}", end="")
+    if skipped:
+        print(f", {skipped} skipped", end="")
+    print()
     print("=" * 70)
 
-    return 0 if failed == 0 else 1
+    return 0 if unexpected == 0 else 1
 
 
 def _die(msg: str) -> None:
