@@ -21,6 +21,8 @@ cmake --build build
 
 This will automatically fetch and build [effcee](https://github.com/google/effcee) and [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools), which are hard requirements, plus whichever of [slang](https://github.com/shader-slang/slang), [glslang](https://github.com/KhronosGroup/glslang/), and [dxc](https://github.com/microsoft/directxshadercompiler) it can via FetchContent or your system `PATH`.
 
+This testing framework is just a python, but by default, will use the `build/sit.cfg.json` to load the path to these various tools being build/fetched.
+
 ### Shader compilers are optional, but you need at least one
 
 slang, glslang, and dxc are each individually optional. CMake configure will only warn, not fail, if any (or all) of them can't be found. If a compiler can't be found, tests that need it are skipped (not failed) at run time, with a `SKIP` message explaining why.
