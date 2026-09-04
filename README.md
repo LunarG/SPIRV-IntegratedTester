@@ -1,6 +1,6 @@
 # SPIR-V Integrated Tester
 
-A regression testing framework for NonSemantic.ShaderDebugInfo.
+A regression testing framework for [NonSemantic.ShaderDebugInfo](https://github.com/KhronosGroup/SPIRV-Guide/blob/main/chapters/shader_debug_info.md).
 
 ## Background
 
@@ -8,7 +8,7 @@ Shader debug information spans three layers of the ecosystem that must all work 
 
 1. Shading languages (slang, glslang, dxc) generate correct debug information.
 2. SPIR-V modifications (spirv-opt) preserve debug information.
-3. Debugging tools (RenderDoc, NSight, VVL) correctly parse and display it.
+3. Debugging tools (RenderDoc, NSight, Validation Layers) correctly parse and display it.
 
 This framework provides a simple, file-based regression suite to catch breakage across these layers.
 
@@ -19,7 +19,7 @@ cmake -B build
 cmake --build build
 ```
 
-This will automatically fetch and build effcee and SPIRV-Tools, which are hard requirements, plus whichever of slang, glslang, and dxc it can via FetchContent or your system `PATH`.
+This will automatically fetch and build [effcee](https://github.com/google/effcee) and [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools), which are hard requirements, plus whichever of [slang](https://github.com/shader-slang/slang), [glslang](https://github.com/KhronosGroup/glslang/), and [dxc](https://github.com/microsoft/directxshadercompiler) it can via FetchContent or your system `PATH`.
 
 ### Shader compilers are optional, but you need at least one
 
