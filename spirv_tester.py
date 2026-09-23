@@ -94,6 +94,10 @@ STATUS_XPASS = "XPASS"
 # Default config file name to search for.
 DEFAULT_CONFIG_NAME = "sit.cfg.json"
 
+# Every file this harness reads is decoded with this encoding. Named once so
+# config reads and test-file reads cannot drift apart.
+ENCODING = "utf-8"
+
 
 class Config:
     def __init__(self):
@@ -118,7 +122,7 @@ def find_default_config() -> Path | None:
 def load_config(cfg_path: Path) -> Config:
     """Load and validate a sit.cfg.json file."""
     try:
-        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+        raw = json.loads(cfg_path.read_text(encoding=ENCODING))
     except OSError as e:
         _die(f"Cannot read config file: {e}")
     except json.JSONDecodeError as e:
@@ -296,15 +300,16 @@ def _parse_run_lines(test_file: Path) -> tuple[list[str], list[str]]:
     run_lines = []
     override_lines = []
     try:
-        for line in test_file.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            m = RUN_RE.match(stripped)
-            if m:
-                run_lines.append(m.group(1).strip())
-                continue
-            m = RUN_OVERRIDE_RE.match(stripped)
-            if m:
-                override_lines.append(m.group(1).strip())
+        with test_file.open(encoding=ENCODING) as f:
+            for line in f:
+                stripped = line.strip()
+                m = RUN_RE.match(stripped)
+                if m:
+                    run_lines.append(m.group(1))
+                    continue
+                m = RUN_OVERRIDE_RE.match(stripped)
+                if m:
+                    override_lines.append(m.group(1))
     except OSError as e:
         _die(f"Cannot read test file {test_file}: {e}")
     return run_lines, override_lines
@@ -319,20 +324,21 @@ def _parse_xfail(test_file: Path) -> str | None:
     """
     reasons = []
     try:
-        for line in test_file.read_text(encoding="utf-8").splitlines():
-            m = XFAIL_RE.match(line.strip())
-            if m:
-                reasons.append(m.group(1).strip())
+        with test_file.open(encoding=ENCODING) as f:
+            for line in f:
+                m = XFAIL_RE.match(line.strip())
+                if m:
+                    reasons.append(m.group(1))
     except OSError as e:
         _die(f"Cannot read test file {test_file}: {e}")
 
     if not reasons:
         return None
     if len(reasons) > 1:
-        _die(f"{test_file}: multiple XFAIL: lines found. "
-             f"Only one XFAIL: line is supported per test.")
+        _die(f"{test_file}: multiple {STATUS_XFAIL}: lines found. "
+             f"Only one {STATUS_XFAIL}: line is supported per test.")
     if not reasons[0]:
-        _die(f"{test_file}: XFAIL: requires a reason. For example: "
+        _die(f"{test_file}: {STATUS_XFAIL}: requires a reason. For example: "
              f"'// XFAIL: SPIRV-Tools#6718, DebugValue references OpUndef'.")
     return reasons[0]
 
@@ -383,14 +389,14 @@ def run_test(
     xfail_reason = _parse_xfail(test_file)
 
     if not run_lines and not override_lines:
-        _warn(f"SKIP  {test_file} (no RUN: or RUN_OVERRIDE: lines found)")
+        _warn(f"{STATUS_SKIP:<5} {test_file} (no RUN: or RUN_OVERRIDE: lines found)")
         return STATUS_SKIP  # Not a failure; just nothing to run.
 
     # Skip (don't fail) tests whose compiler isn't available on this system,
     # e.g. a .slang test when slang wasn't found/installed.
     missing = _missing_compiler(run_lines[0] if run_lines else override_lines[0], config)
     if missing:
-        _warn(f"SKIP  {test_file} (compiler for {missing} is not available)")
+        _warn(f"{STATUS_SKIP:<5} {test_file} (compiler for {missing} is not available)")
         return STATUS_SKIP
 
     # Per-test substitutions available to RUN: and RUN_OVERRIDE: lines.
@@ -441,7 +447,7 @@ def run_test(
                 _print_failure(test_file, run_line, cmd, output,
                                label=STATUS_XFAIL, reason=xfail_reason)
             else:
-                print(f"XFAIL {test_file} ({xfail_reason})")
+                print(f"{STATUS_XFAIL:<5} {test_file} ({xfail_reason})")
             return STATUS_XFAIL
         debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
         _print_failure(test_file, run_line, cmd, output, debug_path)
@@ -491,12 +497,12 @@ def _run_command(cmd: str) -> tuple[bool, str]:
 def _print_xpass(test_file: Path, reason: str) -> None:
     """Report a test that carries an XFAIL: directive but passed anyway."""
     sep = "-" * 70
-    print(f"\nXPASS {test_file}")
+    print(f"\n{STATUS_XPASS} {test_file}")
     print(sep)
-    print("  This test has an XFAIL: directive, but it passed.")
+    print(f"  This test has an {STATUS_XFAIL}: directive, but it passed.")
     print(f"  Reason on file: {reason}")
     print("  Find out why before you act. If the defect is fixed, remove the")
-    print("  XFAIL: line. If it is not fixed, a CHECK line has probably been")
+    print(f"  {STATUS_XFAIL}: line. If it is not fixed, a CHECK line has probably been")
     print("  weakened until it matched.")
     print(sep)
 
@@ -517,7 +523,7 @@ def _print_failure(
     print(f"\n{label:<5} {test_file}")
     print(sep)
     if reason:
-        print(f"  XFAIL    : {reason}")
+        print(f"  {STATUS_XFAIL:<9}: {reason}")
     print(f"  RUN line : {run_line}")
     print(f"  Expanded : {expanded_cmd}")
     if debug_path:
@@ -558,7 +564,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
-        help="Print PASS results, and the full diagnostic for expected failures.",
+        help=f"Print {STATUS_PASS} results, and the full diagnostic for expected failures.",
     )
     return parser.parse_args()
 
@@ -620,15 +626,23 @@ def main() -> int:
             if status == STATUS_PASS:
                 passed += 1
                 if args.verbose:
-                    print(f"PASS  {test_file}")
+                    print(f"{STATUS_PASS:<5} {test_file}")
             elif status == STATUS_SKIP:
                 skipped += 1
             elif status == STATUS_XFAIL:
                 xfailed += 1
             elif status == STATUS_XPASS:
                 xpassed += 1
-            else:
+            elif status == STATUS_FAIL:
                 failed += 1
+            else:
+                # Unreachable while run_test() returns only STATUS_* values.
+                # It stays unreachable loudly, so a new status added later
+                # cannot be counted as a failure by accident.
+                raise AssertionError(
+                    f"{test_file}: run_test() returned an unknown status "
+                    f"{status!r}"
+                )
 
     # An expected failure is not a problem. A real failure and an unexpected
     # pass both are, and both must show in the exit code.

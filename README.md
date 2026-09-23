@@ -66,7 +66,7 @@ python3 spirv_tester.py --config build/sit.cfg.json
 
 When a test fails, intermediate `.spv` and `.spvasm` artifacts are automatically saved to the `debug_dir` specified in `sit.cfg.json` (default: `sit-debug/` in the repo root). The failure message will print the exact path. The folder is cleared at the start of each run and removed once no unexpected results remain.
 
-Expected failures are the exception: a test carrying an `// XFAIL:` directive saves no artifacts, because that outcome is already understood. See [Documenting a known defect](#documenting-a-known-defect-the--xfail-directive). To inspect the SPIR-V for one, run its `RUN:` pipeline by hand, or comment out the `XFAIL:` line temporarily.
+A test that carries an `// XFAIL:` directive saves no artifacts, because that outcome is already understood. See [Documenting a known defect](#documenting-a-known-defect-the--xfail-directive). To inspect the SPIR-V for one, run its `RUN:` pipeline by hand, or comment out the `XFAIL:` line temporarily.
 
 ## Adding Tests
 
@@ -131,7 +131,7 @@ An unexpected pass is the payoff of the directive. It means one of two things, a
 
 #### Before you write one
 
-An `XFAIL` test asserts output that does not exist yet, so it can accidentally demand something the tooling is not permitted to do. `NonSemantic.Shader.DebugInfo.100` instructions are non-semantic and must never change the semantic instructions of a module. See the "Asserting future behavior" section of `CLAUDE.md` for the two conditions an assertion must satisfy, and run `python3 check_debug_operands.py <test>` to report them.
+An `XFAIL` test asserts output that does not exist yet, so it can accidentally demand something the tooling is not permitted to do. `NonSemantic.Shader.DebugInfo.100` instructions are non-semantic and must never change the semantic instructions of a module. Run `python3 check_debug_operands.py <test>` to report the conditions an assertion must satisfy.
 
 ### Design principle: the harness never guesses stage or profile
 
