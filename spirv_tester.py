@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -100,6 +99,8 @@ ENCODING = "utf-8"
 
 
 class Config:
+    """Resolved contents of a sit.cfg.json file."""
+
     def __init__(self):
         self.test_dir: str = ""
         self.debug_dir: str = ""
@@ -257,7 +258,7 @@ def _build_pipeline(run_line: str, test_file: Path) -> str:
     and reassemble into a full shell command.
     """
     stages = _split_pipeline(run_line)
-    stage_map = {stage: cmd for stage, cmd in stages}
+    stage_map = dict(stages)
 
     # Compile stage must be present.
     if STAGE_COMPILE not in stage_map:
@@ -413,7 +414,8 @@ def run_test(
 
     if run_lines:
         if len(run_lines) > 1:
-            _die(f"{test_file}: multiple RUN: lines found. Only one RUN: line is supported per test.")
+            _die(f"{test_file}: multiple RUN: lines found. "
+                 f"Only one RUN: line is supported per test.")
         run_line = run_lines[0]
         run_line = _inject_implicit_source(run_line)
         run_line = _inject_default_target(run_line)
@@ -421,7 +423,8 @@ def run_test(
         run_line = _build_pipeline(run_line, test_file)
     else:
         if len(override_lines) > 1:
-            _die(f"{test_file}: multiple RUN_OVERRIDE: lines found. Only one RUN_OVERRIDE: line is supported per test.")
+            _die(f"{test_file}: multiple RUN_OVERRIDE: lines found. "
+                 f"Only one RUN_OVERRIDE: line is supported per test.")
         # RUN_OVERRIDE: skip all smart pipeline logic, just substitute and run.
         # TODO: add a tests/internal/ .spvasm case using
         #   RUN_OVERRIDE: %check --spvasm %s --source %s
@@ -488,6 +491,7 @@ def _run_command(cmd: str) -> tuple[bool, str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            check=False,  # The caller inspects returncode itself.
         )
         return result.returncode == 0, result.stdout
     except OSError as e:
@@ -540,6 +544,7 @@ def _print_failure(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse the command line."""
     parser = argparse.ArgumentParser(
         description="SPIR-V Integrated Tester — ShaderDebugInfo regression harness",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -553,7 +558,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         metavar="CFG",
-        help=f"Path to sit.cfg.json (default: searches ./ then ./build/).",
+        help="Path to sit.cfg.json (default: searches ./ then ./build/).",
     )
     parser.add_argument(
         "tests",
@@ -570,6 +575,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run the suite. Returns the process exit code."""
     args = parse_args()
 
     # Resolve config path.

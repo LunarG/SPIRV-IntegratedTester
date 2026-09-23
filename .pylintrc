@@ -1,0 +1,28 @@
+# pylint configuration for SPIRV-IntegratedTester.
+#
+# This file lists only the changes from the defaults of pylint. Each change
+# records the reason for it. Every other option keeps its default value.
+
+[MESSAGES CONTROL]
+
+disable=
+# Config holds the parsed contents of sit.cfg.json and nothing else. A method
+# that exists only to satisfy a counter does not make the class clearer.
+    too-few-public-methods,
+# The one TODO in the harness records real work. It is not a defect.
+    fixme
+
+[DESIGN]
+
+# main() is a linear driver. It reads sit.cfg.json, finds the tests, runs them,
+# counts the results, and reports them. run_test() has the same shape.
+#
+# A version of either function that obeys the default counters spreads one
+# readable sequence over several functions. Each of those functions then has one
+# caller. So this file raises the counters instead. Each limit is a little more
+# than the two functions need, so a new kind of complexity still fails the check.
+max-args=8
+max-positional-arguments=8
+max-locals=20
+max-branches=30
+max-statements=70
