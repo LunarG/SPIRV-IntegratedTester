@@ -168,4 +168,6 @@ The `tests/internal/` directory contains tests that exercise various RUN line pe
 
 ## License
 
-TBD
+Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+Source files carry the standard Apache header. The shader files in `tests/` do not. A reader starts at the top of a test, where the `RUN:` line comes first.
