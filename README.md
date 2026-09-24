@@ -1,6 +1,6 @@
 # SPIR-V Integrated Tester
 
-A regression testing framework for [NonSemantic.ShaderDebugInfo](https://github.com/KhronosGroup/SPIRV-Guide/blob/main/chapters/shader_debug_info.md).
+A regression testing framework for [NonSemantic.Shader.DebugInfo](https://github.com/KhronosGroup/SPIRV-Guide/blob/main/chapters/shader_debug_info.md).
 
 ## Background
 

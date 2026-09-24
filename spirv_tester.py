@@ -15,7 +15,7 @@
 
 """
 SPIR-V Integrated Tester
-A simple test harness for NonSemantic.ShaderDebugInfo regression testing.
+A simple test harness for NonSemantic.Shader.DebugInfo regression testing.
 """
 from __future__ import annotations
 
