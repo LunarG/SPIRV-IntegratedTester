@@ -63,7 +63,9 @@ COMPILER_DEBUG_FLAGS = {
 # (existence_check, flag) pairs. Only flags safe to assume go here.
 COMPILER_DEFAULT_TARGETS = {
     "%slangc":  [("-target", "-target spirv")],
-    "%glslang": [("-V", "-V")],
+    # glslang prints the name of each input file to stdout. --quiet stops
+    # that line, but glslang still prints compile errors.
+    "%glslang": [("-V", "-V"), ("--quiet", "--quiet")],
     "%dxc":     [("-spirv", "-spirv"), ("-E", "-E main")],
 }
 
@@ -360,6 +362,32 @@ def _apply_substitutions(
     return command
 
 
+def _used_tools(
+    run_line: str, substitutions: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Return the tool substitutions that a RUN line uses, in RUN line order.
+
+    The match is longest-first, the same as _apply_substitutions. Each match
+    becomes spaces, so a shorter pattern cannot match inside it. No current
+    tool pattern contains another. This order is a guard for a future tool.
+    For example, a %spirv tool must not match inside %spirv_dis.
+
+    The caller passes only the tool substitutions from sit.cfg.json. The
+    per-test substitutions (%s, %spv, %spvasm, %t) are not tools.
+    """
+    remaining = run_line
+    used = []
+    for pattern, path in sorted(substitutions, key=lambda pair: len(pair[0]), reverse=True):
+        position = remaining.find(pattern)
+        if position < 0:
+            continue
+        used.append((position, pattern, path))
+        # Replace each match with filler of the same length. The filler keeps
+        # the positions of later matches correct.
+        remaining = remaining.replace(pattern, " " * len(pattern))
+    return [(pattern, path) for _, pattern, path in sorted(used)]
+
+
 def _missing_compiler(text: str, config: Config) -> str | None:
     """If `text` references a compiler substitution (%slangc, %glslang, %dxc)
     that isn't available in this config (i.e. that compiler wasn't found at
@@ -447,13 +475,13 @@ def run_test(
             # No artifacts are saved either way. With no unexpected results,
             # main() removes debug_dir before anyone could read them.
             if verbose:
-                _print_failure(test_file, run_line, cmd, output,
+                _print_failure(test_file, run_line, config.substitutions, output,
                                label=STATUS_XFAIL, reason=xfail_reason)
             else:
                 print(f"{STATUS_XFAIL:<5} {test_file} ({xfail_reason})")
             return STATUS_XFAIL
         debug_path = _save_debug_artifacts(test_file, tmp_dir, config)
-        _print_failure(test_file, run_line, cmd, output, debug_path)
+        _print_failure(test_file, run_line, config.substitutions, output, debug_path)
         return STATUS_FAIL
 
     if xfail_reason:
@@ -512,11 +540,16 @@ def _print_xpass(test_file: Path, reason: str) -> None:
 
 
 def _print_failure(
-    test_file: Path, run_line: str, expanded_cmd: str, output: str,
-    debug_path: Path | None = None, label: str = STATUS_FAIL,
+    test_file: Path, run_line: str, substitutions: list[tuple[str, str]],
+    output: str, debug_path: Path | None = None, label: str = STATUS_FAIL,
     reason: str | None = None,
 ) -> None:
     """Print the diagnostic for a failed test.
+
+    `substitutions` holds the tool paths from sit.cfg.json. The report shows
+    the path of each tool that the RUN line uses. The report does not show
+    the expanded command, because its temporary paths do not exist after the
+    run.
 
     `label` and `reason` let an expected failure reuse this report under -v,
     where the same detail is what a maintainer needs to investigate one.
@@ -529,7 +562,12 @@ def _print_failure(
     if reason:
         print(f"  {STATUS_XFAIL:<9}: {reason}")
     print(f"  RUN line : {run_line}")
-    print(f"  Expanded : {expanded_cmd}")
+    tools = _used_tools(run_line, substitutions)
+    if tools:
+        print("  Paths    :")
+        width = max(len(pattern) for pattern, _ in tools)
+        for pattern, path in tools:
+            print(f"    {pattern:<{width}} = {path}")
     if debug_path:
         print(f"  Artifacts: {debug_path}")
     if output.strip():
