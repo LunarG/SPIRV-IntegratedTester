@@ -186,6 +186,10 @@ RUN_OVERRIDE_RE = re.compile(r"^//\s*RUN_OVERRIDE:\s*(.+)$")
 # Deliberately '(.*)' rather than '(.+)': an XFAIL: line with no reason must be
 # reported as an error, not silently ignored because the pattern did not match.
 XFAIL_RE        = re.compile(r"^//\s*XFAIL:\s*(.*)$")
+# A location in an effcee message, such as "test.slang:16:11: error: ...".
+# For a failed CHECK-NOT, the error names the .spvasm file and a note names
+# the test file. So both kinds are accepted.
+EFFCEE_LOCATION_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+):\d+: (?:error|note): ")
 
 
 def _inject_implicit_source(run_line: str) -> str:
@@ -539,6 +543,44 @@ def _print_xpass(test_file: Path, reason: str) -> None:
     print(sep)
 
 
+def _failure_context(test_file: Path, output: str) -> list[tuple[int, str]]:
+    """Return the comment block that ends at the failed directive.
+
+    effcee names the failed directive by its line in the test file. The
+    comments above that line usually give the reason for the assertion. This
+    function starts at that line and moves up until it finds a blank line or
+    a line that is not a comment. The other directives in the block stay in
+    the result, because the failed directive can use their captures.
+
+    The result holds (line number, text) pairs in source order. The result is
+    empty if the output names no line in the test file, for example when the
+    compiler fails. The result is also empty if the file cannot be read, so
+    that the report itself never fails.
+    """
+    target = test_file.resolve()
+    failed_line = None
+    for line in output.splitlines():
+        match = EFFCEE_LOCATION_RE.match(line)
+        if match and Path(match.group("path")).resolve() == target:
+            failed_line = int(match.group("line"))
+            break
+    if failed_line is None:
+        return []
+
+    try:
+        with test_file.open(encoding=ENCODING) as f:
+            source = f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    if not 1 <= failed_line <= len(source):
+        return []
+
+    first = failed_line
+    while first > 1 and source[first - 2].lstrip().startswith("//"):
+        first -= 1
+    return [(n, source[n - 1]) for n in range(first, failed_line + 1)]
+
+
 def _print_failure(
     test_file: Path, run_line: str, substitutions: list[tuple[str, str]],
     output: str, debug_path: Path | None = None, label: str = STATUS_FAIL,
@@ -570,6 +612,15 @@ def _print_failure(
             print(f"    {pattern:<{width}} = {path}")
     if debug_path:
         print(f"  Artifacts: {debug_path}")
+    context = _failure_context(test_file, output)
+    if context:
+        print("  Context  :")
+        # The last line of the block is the failed directive.
+        failed_line, _ = context[-1]
+        width = len(str(failed_line))
+        for number, text in context:
+            marker = ">" if number == failed_line else " "
+            print(f"    {marker} {number:>{width}} | {text}")
     if output.strip():
         print("  Output   :")
         for line in output.splitlines():
