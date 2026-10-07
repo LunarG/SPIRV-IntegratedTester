@@ -535,11 +535,7 @@ def _print_xpass(test_file: Path, reason: str) -> None:
     sep = "-" * 70
     print(f"\n{STATUS_XPASS} {test_file}")
     print(sep)
-    print(f"  This test has an {STATUS_XFAIL}: directive, but it passed.")
-    print(f"  Reason on file: {reason}")
-    print("  Find out why before you act. If the defect is fixed, remove the")
-    print(f"  {STATUS_XFAIL}: line. If it is not fixed, a CHECK line has probably been")
-    print("  weakened until it matched.")
+    print(f"  {STATUS_XFAIL}: {reason}")
     print(sep)
 
 
@@ -764,6 +760,11 @@ def main() -> int:
         print(f", {skipped} skipped", end="")
     print()
     print("=" * 70)
+    if xpassed:
+        print(f"\nAn {STATUS_XPASS} test has an {STATUS_XFAIL}: line, but it passed.")
+        print("Find the cause before you change the test.")
+        print(f"If the defect is fixed, remove the {STATUS_XFAIL}: line.")
+        print("If the defect is not fixed, look for a CHECK line that is too weak.")
 
     return 0 if unexpected == 0 else 1
 
