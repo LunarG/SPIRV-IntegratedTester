@@ -12,7 +12,7 @@ Shader debug information goes through three layers of the ecosystem. All three l
 2. SPIR-V transforms (spirv-opt) keep the debug information.
 3. Debugging tools (RenderDoc, NSight, Validation Layers) read and show the debug information correctly.
 
-This project is a file-based regression suite. It finds errors in each of these layers.
+This project is a file-based regression suite. It finds errors in `Shading language compilers` and `SPIR-V transforms`. The testing of `Debugging tools` is outside the scope of this tool.
 
 ## Building
 
