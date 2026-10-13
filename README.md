@@ -80,6 +80,19 @@ The harness clears this folder at the start of each run. If no test has an unexp
 
 A test with an `// XFAIL:` directive does not copy files, because its failure is expected. See [Documenting a known defect](./ADD_TEST.md#documenting-a-known-defect-the--xfail-directive). To see the SPIR-V of such a test, run its `RUN:` pipeline manually. Alternatively, remove the `XFAIL:` line for one run.
 
+### Running with lit (prototype)
+
+The same tests also run under [lit](https://pypi.org/project/lit/), the LLVM Integrated Tester, with no changes to the test files. CMake fetches lit, so there is nothing to install:
+
+```sh
+build/sit-lit.py -sv tests                      # whole suite, in parallel
+build/sit-lit.py -v tests/slang/example.slang   # one test
+ninja -C build check-sit                        # rebuild the tools, then run the suite
+build/sit-lit.py --watch -sv tests              # rerun on every change
+```
+
+See [docs/lit.md](docs/lit.md) for how it works and how it is extended.
+
 ## License
 
 Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.

@@ -355,3 +355,76 @@ file(GENERATE
     OUTPUT "${CMAKE_BINARY_DIR}/sit.cfg.json"
     INPUT  "${CMAKE_BINARY_DIR}/sit.cfg.json.intermediate"
 )
+
+# ---------------------------------------------------------------------------
+# lit (LLVM Integrated Tester)
+#
+# lit is pure Python with no dependencies, so the PyPI source archive is
+# enough: the generated sit-lit.py puts it on sys.path. No pip install needed.
+#
+# Resolution priority:
+#   1. FetchContent  — if SPIRV_TESTER_FETCH_LIT is ON (default)
+#   2. Python import — a lit that Python3_EXECUTABLE can already import
+#                      (e.g. "pip install lit" into that interpreter)
+# ---------------------------------------------------------------------------
+option(SPIRV_TESTER_FETCH_LIT
+    "Fetch lit from PyPI via FetchContent instead of using an installed lit"
+    ON)
+
+if(SPIRV_TESTER_FETCH_LIT)
+    set(LIT_VERSION "23.1.2")
+    FetchContent_Declare(
+        lit
+        URL "https://files.pythonhosted.org/packages/source/l/lit/lit-${LIT_VERSION}.tar.gz"
+        URL_HASH SHA256=1a839a3f187ae74ce96d9b29a6b5b69671359e436b674e706f2ea5a343ca3cd6
+    )
+    # The archive has no CMakeLists.txt, so this only downloads and extracts it.
+    FetchContent_MakeAvailable(lit)
+    set(LIT_PYTHONPATH "${lit_SOURCE_DIR}")
+    message(STATUS "Using FetchContent lit ${LIT_VERSION}")
+else()
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c "import lit; print(lit.__version__)"
+        OUTPUT_VARIABLE _lit_version
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _lit_result
+        ERROR_QUIET)
+    if(NOT _lit_result EQUAL 0)
+        message(WARNING
+            "SPIRV_TESTER_FETCH_LIT is OFF and '${Python3_EXECUTABLE}' cannot import lit. "
+            "Run 'pip install lit' for that interpreter, or enable SPIRV_TESTER_FETCH_LIT.")
+    else()
+        message(STATUS "Using installed lit ${_lit_version}")
+    endif()
+    set(LIT_PYTHONPATH "")
+endif()
+
+# lit.site.cfg.py holds the paths for this build directory. It then loads the
+# checked-in tests/lit.cfg.py. Two steps for the same reason as sit.cfg.json.
+configure_file(tests/lit.site.cfg.py.in tests/lit.site.cfg.py.intermediate @ONLY)
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/tests/lit.site.cfg.py"
+    INPUT  "${CMAKE_BINARY_DIR}/tests/lit.site.cfg.py.intermediate"
+)
+
+# sit-lit.py is the lit entry point for this build, in the style of LLVM's
+# llvm-lit. It accepts test paths in the source tree as well as the build tree.
+configure_file(utils/sit-lit.py.in "${CMAKE_BINARY_DIR}/sit-lit.py" @ONLY
+    FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                     GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
+# "ninja check-sit" rebuilds whichever tools this project builds, then runs the
+# suite. Pass extra lit options through the LIT_OPTS environment variable, e.g.
+#   LIT_OPTS="--filter=slang" ninja check-sit
+set(SIT_CHECK_DEPENDS FileCheck)
+if(TARGET spirv-dis)
+    list(APPEND SIT_CHECK_DEPENDS spirv-dis spirv-opt spirv-val)
+endif()
+add_custom_target(check-sit
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_BINARY_DIR}/sit-lit.py" -sv "${CMAKE_SOURCE_DIR}/tests"
+    DEPENDS ${SIT_CHECK_DEPENDS}
+    USES_TERMINAL
+    COMMENT "Running the SPIR-V Integrated Tester suite with lit")
+
+add_test(NAME sit-lit
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_BINARY_DIR}/sit-lit.py" -sv "${CMAKE_SOURCE_DIR}/tests")
